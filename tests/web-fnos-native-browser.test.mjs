@@ -7,6 +7,15 @@ import {EventEmitter} from 'node:events';
 import {WebSocketServer} from 'ws';
 import http from 'node:http';
 
+test('native browser uses an unreserved display when the preferred one is occupied',async()=>{
+ const {selectNativeDisplay}=await import('../server/fnos-native/browsers.mjs');
+ const occupied=new Set([122,800]);
+ const reserved=new Set([122,123,801]);
+ assert.equal(selectNativeDisplay(122,reserved,display=>occupied.has(display)),802);
+ assert.equal(selectNativeDisplay(123,reserved,display=>occupied.has(display)),123);
+ assert.throws(()=>selectNativeDisplay(122,reserved,()=>true),/无空闲备用编号/);
+});
+
 test('CDP readiness saves the unique loopback browser URL and refuses a different port',async t=>{
  const {probeNativeBrowserReady}=await import('../server/fnos-native/browsers.mjs');let endpoint;
  const server=http.createServer((req,res)=>res.end(JSON.stringify({webSocketDebuggerUrl:endpoint})));await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));

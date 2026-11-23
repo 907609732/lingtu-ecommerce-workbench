@@ -61,6 +61,20 @@ export async function probeNativeBrowserReady(kind,spec){
   return await new Promise(resolve=>{const ws=new WebSocket(spec.vncEndpoint.replace('http:','ws:')+'/websockify',['binary'],{origin:spec.vncEndpoint});const timer=setTimeout(()=>{ws.close();resolve(false);},1000);ws.onopen=()=>{clearTimeout(timer);ws.close();resolve(true);};ws.onerror=()=>{clearTimeout(timer);resolve(false);};});
  }catch{return false;}
 }
+export function selectNativeDisplay(preferred,reserved,isOccupied){
+ if(!isOccupied(preferred))return preferred;
+ for(let display=800;display<=999;display++){
+  if(!reserved.has(display)&&!isOccupied(display))return display;
+ }
+ throw Error('原生虚拟显示 :'+preferred+' 已占用，且无空闲备用编号');
+}
+
+function isNativeDisplayOccupied(display){
+ return ['/tmp/.X'+display+'-lock','/tmp/.X11-unix/X'+display].some(file=>{
+  try{fs.lstatSync(file);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}
+ });
+}
+
 export function createNativeBrowsers(config,{logger,spawnProcess=spawn,probe=probeNativeBrowserReady,readinessTimeoutMs=20000,signal,gracefulClose}={}){
  const browser=config.native?.browser,specs=nativeBrowserSpecs(config),physicalSpecs=Object.values(specs).filter(s=>s.id===s.physicalId),children=[],states={},owned={};
  let state='stopped',failure=null,starting,stopping,runDir,controller,startSignal;
@@ -156,7 +170,7 @@ export function createNativeBrowsers(config,{logger,spawnProcess=spawn,probe=pro
      for(const file of [browser.chromiumPath,...['Xvfb','x11vnc','xauth'].map(n=>path.join(bin,n)),path.join(browser.novncRoot,'vnc.html'),...['libvulkan.so.1','libvk_swiftshader.so','vk_swiftshader_icd.json'].map(n=>path.join(chromiumDir,n)),path.join(gioModules,'libdconfsettings.so')])if(!fs.statSync(file).isFile())throw Error('原生浏览器缺少运行文件 '+file);
      const icdLibrary=JSON.parse(fs.readFileSync(vulkanIcd,'utf8')).ICD?.library_path;
      if(typeof icdLibrary!=='string'||path.resolve(chromiumDir,icdLibrary)!==path.join(chromiumDir,'libvk_swiftshader.so'))throw Error('SwiftShader ICD 必须指向同包私有库');
-     for(const s of physicalSpecs){await available(s.cdpPort);await available(s.vncPort);if(fs.existsSync('/tmp/.X'+s.display+'-lock')||fs.existsSync('/tmp/.X11-unix/X'+s.display))throw Error('原生 display 已占用，拒绝接管');}
+     for(const s of physicalSpecs){await available(s.cdpPort);await available(s.vncPort);}
      const launchRoot=path.join(config.native.runtimeDir||config.stateDir,'native-browser');
      privateDir(path.join(config.native.dataRoot,'browser-profiles'));privateDir(launchRoot);
      runDir=path.join(launchRoot,randomUUID());privateDir(runDir);
@@ -167,7 +181,12 @@ export function createNativeBrowsers(config,{logger,spawnProcess=spawn,probe=pro
      // inherited desktop/plugin overrides from reopening host search paths.
      for(const key of ['GIO_EXTRA_MODULES','VK_ADD_DRIVER_FILES','VK_ADD_LAYER_PATH','VK_ADD_IMPLICIT_LAYER_PATH','VK_INSTANCE_LAYERS','VK_LOADER_LAYERS_ENABLE','VK_LOADER_LAYERS_ALLOW','LIBVA_DRIVER_NAME'])delete baseEnv[key];
      const version=versionParts(await run(browser.chromiumPath,['--version'],baseEnv));if(!version)throw Error('无法确认 Chromium 版本');
-     for(const s of physicalSpecs){
+     const reservedDisplays=new Set(physicalSpecs.map(spec=>spec.display));
+     for(const spec of physicalSpecs){
+      const display=selectNativeDisplay(spec.display,reservedDisplays,isNativeDisplayOccupied);
+      reservedDisplays.add(display);
+      if(display!==spec.display)logger?.warn?.('原生虚拟显示 :'+spec.display+' 已占用，改用 :'+display);
+      const s={...spec,display};
       let retainedProfile=null,login='unknown';
       if(fs.existsSync(s.profile)){
        if(fs.lstatSync(s.profile).isSymbolicLink())throw Error('浏览器 profile 不能是链接');
