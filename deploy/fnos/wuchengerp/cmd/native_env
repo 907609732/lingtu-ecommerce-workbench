@@ -111,7 +111,13 @@ prepare_runtime() {
  RUNTIME_BASE=$(CDPATH= cd -P "$TRIM_PKGVAR" 2>/dev/null && pwd -P) || fail 'ERP 应用 VAR 无法解析。'
  ERP_NATIVE_RUNTIME_DIR="$RUNTIME_BASE/runtime"
  if ! prepare_runtime_as_package 2>/dev/null; then
-  [ "$(id -u)" = 0 ] && prepare_root_var && prepare_runtime_as_package || fail 'ERP 私有 runtime 创建或属主校验失败。'
+  if ! { [ "$(id -u)" = 0 ] && prepare_root_var && prepare_runtime_as_package; }; then
+   VAR_STATE=$(stat -c '%F %u:%g %a' "$RUNTIME_BASE" 2>/dev/null || printf unavailable)
+   RUNTIME_STATE=$(stat -c '%F %u:%g %a' "$ERP_NATIVE_RUNTIME_DIR" 2>/dev/null || printf unavailable)
+   EXPECTED_UID=$(id -u "${TRIM_USERNAME:-}" 2>/dev/null || printf unknown)
+   EXPECTED_GID=$(id -g "${TRIM_USERNAME:-}" 2>/dev/null || printf unknown)
+   fail "ERP 私有 runtime 创建或属主校验失败。VAR=$RUNTIME_BASE ($VAR_STATE), runtime=($RUNTIME_STATE), hook UID=$(id -u), package UID:GID=$EXPECTED_UID:$EXPECTED_GID。"
+  fi
  fi
  export ERP_NATIVE_RUNTIME_DIR
 }
