@@ -1,4 +1,5 @@
 import Ajv from 'ajv';
+import {categories} from '../public/classification.mjs';
 import {importRules} from '../public/import-rules.mjs';
 import {orderStatuses} from '../public/order-attributes.mjs';
 import {fields} from './importer.mjs';
@@ -12,11 +13,11 @@ const money=integer('人民币整数分，100表示1元；不得传元或浮点�
 const obj=(properties={},required=[])=>({type:'object',properties,required,additionalProperties:false});
 const arr=(items,maxItems=100000,minItems=0)=>({type:'array',items,maxItems,minItems});
 const platform={type:'string',enum:Object.keys(importRules),description:'真实采购平台；历史手工平台不作为新录入选项'};
-const category={type:'string',enum:['goods','fixed_asset','expense'],description:'商品采购/固定资产采购/日常支出'};
+const category={type:'string',enum:Object.keys(categories),description:Object.values(categories).join('/')};
 const revision=text('上次对应查询返回的revision，变化后须重新查询',300);
 const updatedAt=text('原记录updatedAt，必须原样传回以防覆盖他人修改',100);
 const bool={type:'boolean'};
-const classification=obj({mode:{enum:['single','split']},category,owner:{enum:['company']},parts:arr(obj({category,amountCents:money,refundCents:money},['category','amountCents','refundCents']),3,2)},['mode']);
+const classification=obj({mode:{enum:['single','split']},category,owner:{enum:['company']},parts:arr(obj({category,amountCents:money,refundCents:money},['category','amountCents','refundCents']),Object.keys(categories).length,2)},['mode']);
 const shipment=obj({trackingNo:text('运单号',100),logisticsCompany:text('物流公司',200)});
 const item=obj({title:text('商品名称',4000),spec:text('规格',4000),sku:text('货号'),qty:{type:'number',exclusiveMinimum:0},unit:text('数量单位',100),unitPriceCents:{anyOf:[money,{type:'null'}]},trackingNo:text('运单号',100),logisticsCompany:text('物流公司'),shipments:arr(shipment,50)},['title','qty']);
 const orderFields={platform,account:text('实际采购账号，同号跨账号为不同订单'),orderNo:text('平台订单编号，作为字符串保留长整数与前导零',100),date,paidAt:{anyOf:[date,{const:''}]},supplier:text('供应商或店铺名称'),status:{enum:orderStatuses},amountCents:money,refundCents:money,shippingCents:money,note:text('订单备注',10000),items:arr(item,10000,1),classification,excludedFromSpend:bool,attachmentIds:arr(id,20),recipient:text('收货人',4000),phone:text('联系电话',4000),address:text('收货地址',4000),logisticsCompany:text('物流公司',4000),trackingNo:text('运单号',4000),supplierContact:obj({name:text('联系人'),phone:text('电话',40),address:text('详细地址',4000)})};

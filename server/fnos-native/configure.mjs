@@ -59,12 +59,17 @@ function quarantineStoppedChromiumLocks(sourceRoot,backupTarget){
   catch(error){if(error.code!=='ESRCH')throw error;}
  }
  if(!entries.length)return;
- const destination=fs.mkdtempSync(backupTarget+'.chromium-locks-');
+ const sockets=fs.readFileSync('/proc/net/unix','utf8').split('\n').map(line=>line.trim().split(/\s+/,8)[7]);
  for(const entry of entries){
   const current=fs.lstatSync(entry.file);
   if(!current.isSymbolicLink()||current.dev!==entry.stat.dev||current.ino!==entry.stat.ino||current.uid!==uid||fs.readlinkSync(entry.file)!==entry.link)throw Error('浏览器锁在检查后发生变化：'+entry.module+'/'+entry.name);
-  fs.renameSync(entry.file,path.join(destination,entry.module+'-'+entry.name));
+  if(entry.name==='SingletonSocket'&&sockets.includes(entry.link))throw Error('浏览器套接字仍在使用：'+entry.module);
  }
+ // Retained-data recovery rejects symlinks even in backup folders.
+ // Record the verified stale link targets as metadata before removing them.
+ const destination=fs.mkdtempSync(backupTarget+'.chromium-locks-');
+ fs.writeFileSync(path.join(destination,'links.json'),JSON.stringify(entries.map(({module,name,link})=>({module,name,link})))+'\n',{mode:0o600,flag:'wx'});
+ for(const entry of entries)fs.unlinkSync(entry.file);
  return destination;
 }
 export async function backupNative(sourceRoot,target,{quarantineBrowserLocks=false}={}){

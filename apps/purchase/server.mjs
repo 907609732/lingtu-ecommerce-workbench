@@ -17,7 +17,7 @@ import {supplierSummary} from './lib/suppliers.mjs';
 import {shipmentText} from './public/shipments.mjs';
 import {includedInSpend,spendSettingLabel} from './public/order-attributes.mjs';
 import {openOrderImages} from './lib/order-images.mjs';
-import {allocations,classificationLabel,classificationDescription,unallocatedRefund,categories,contribution} from './public/classification.mjs';
+import {allocations,classificationLabel,classificationDescription,unallocatedRefund,categories,contribution,selectedCategories} from './public/classification.mjs';
 import express from 'express';
 import multer from 'multer';
 import fs from 'node:fs';
@@ -30,7 +30,7 @@ import {DatabaseSync,backup as backupSqlite} from 'node:sqlite';
 import {readTable,normalizeTable,validateOrder,fields} from './lib/importer.mjs';
 import {openStore,summarize} from './lib/store.mjs';
 
-import {filterOrders,sortOrders,orderUploadDate} from './public/order-query.mjs';
+import {filterOrders,sortOrders,orderUploadDate,orderFilterFromQuery} from './public/order-query.mjs';
 import {platformMapping} from './lib/import-rules.mjs';
 import {importRules} from './public/import-rules.mjs';
 
@@ -237,16 +237,18 @@ app.delete('/api/addresses/:id',(req,res)=>res.json(addresses.remove(req.params.
  ;
  const csv=(rows)=>'\uFEFF'+rows.map(row=>row.map(v=>{const s=String(v??'');return '"'+(typeof v!=='number'&&/^[=+@\-\t\r]/.test(s)||/^\d{16,}$/.test(s)?"'":'')+s.replace(/"/g,'""')+'"';}).join(',')).join('\r\n');
  app.get('/api/export',(req,res)=>{
+  const filter=orderFilterFromQuery(req.query);
   let sorters=[];try{sorters=JSON.parse(req.query.sorters||'[]');}catch{throw Error('排序参数无效');}if(!Array.isArray(sorters))throw Error('排序参数无效');
-  const orders=sortOrders(filterOrders(store.list(),req.query,req.query.basis),sorters,req.query.basis);
-  res.setHeader('Content-Disposition',"attachment; filename*=UTF-8''"+encodeURIComponent('采购订单.csv'));res.type('text/csv').send(csv([['采购平台','账号','订单编号','下单日期','付款日期','供应商','实付金额','已退款金额','运费','订单状态','商品名称','商品规格','单价(元)','数量','单位','商品行运单号','商品行物流公司','收货人姓名','收货地址','联系手机','物流公司','运单号','备注','采购类别','分类金额分配','待分配退款','支出归属','筛选类别实付','筛选类别已分配退款','筛选类别净支出','支出统计设置','计入看板','计入采购净支出','上传日期','数据来源','录入人'],...orders.map(o=>[o.platform,o.account,o.orderNo,o.date,o.paidAt,o.supplier,(o.amountCents/100).toFixed(2),(o.refundCents/100).toFixed(2),(o.shippingCents/100).toFixed(2),o.status,o.items.map(i=>`${i.title} × ${i.qty}${i.unit||''}`).join('；'),...['spec','unitPriceCents','qty','unit','trackingNo','logisticsCompany'].map(k=>o.items.map((i,n)=>(o.items.length>1?`${n+1}. `:'')+(k==='unitPriceCents'?(i[k]==null?'':(i[k]/100).toFixed(2)):(['trackingNo','logisticsCompany'].includes(k)?shipmentText(i,k):String(i[k]??'')))).join('\n')),o.recipient,o.address,o.phone,o.logisticsCompany,o.trackingNo,o.note,classificationLabel(o),classificationDescription(o),(unallocatedRefund(o)/100).toFixed(2),'公司共用',...(req.query.category?Object.values(contribution(o,req.query.category)).map(v=>(v/100).toFixed(2)):['','','']),spendSettingLabel(o),includedInSpend(o)?'是':'否',((includedInSpend(o)?contribution(o,req.query.category).netCents:0)/100).toFixed(2),orderUploadDate(o.createdAt),o.sourceLabel,o.uploadedBy])]));
+  const orders=sortOrders(filterOrders(store.list(),filter,req.query.basis),sorters,req.query.basis);
+  res.setHeader('Content-Disposition',"attachment; filename*=UTF-8''"+encodeURIComponent('采购订单.csv'));res.type('text/csv').send(csv([['采购平台','账号','订单编号','下单日期','付款日期','供应商','实付金额','已退款金额','运费','订单状态','商品名称','商品规格','单价(元)','数量','单位','商品行运单号','商品行物流公司','收货人姓名','收货地址','联系手机','物流公司','运单号','备注','采购类别','分类金额分配','待分配退款','支出归属','筛选类别实付','筛选类别已分配退款','筛选类别净支出','支出统计设置','计入看板','计入采购净支出','上传日期','数据来源','录入人'],...orders.map(o=>[o.platform,o.account,o.orderNo,o.date,o.paidAt,o.supplier,(o.amountCents/100).toFixed(2),(o.refundCents/100).toFixed(2),(o.shippingCents/100).toFixed(2),o.status,o.items.map(i=>`${i.title} × ${i.qty}${i.unit||''}`).join('；'),...['spec','unitPriceCents','qty','unit','trackingNo','logisticsCompany'].map(k=>o.items.map((i,n)=>(o.items.length>1?`${n+1}. `:'')+(k==='unitPriceCents'?(i[k]==null?'':(i[k]/100).toFixed(2)):(['trackingNo','logisticsCompany'].includes(k)?shipmentText(i,k):String(i[k]??'')))).join('\n')),o.recipient,o.address,o.phone,o.logisticsCompany,o.trackingNo,o.note,classificationLabel(o),classificationDescription(o),(unallocatedRefund(o)/100).toFixed(2),'公司共用',...(filter.category?Object.values(contribution(o,filter.category)).map(v=>(v/100).toFixed(2)):['','','']),spendSettingLabel(o),includedInSpend(o)?'是':'否',((includedInSpend(o)?contribution(o,filter.category).netCents:0)/100).toFixed(2),orderUploadDate(o.createdAt),o.sourceLabel,o.uploadedBy])]));
  });
  app.get('/api/classification-export',(req,res)=>{
-  const orders=filterOrders(store.list(),req.query,req.query.basis),rows=[];
+  const filter=orderFilterFromQuery(req.query);
+  const orders=filterOrders(store.list(),filter,req.query.basis),rows=[];
   for(const o of orders){
    const common=[o.id,o.platform,o.account,o.orderNo,o.date,o.paidAt,o.supplier,o.status,includedInSpend(o)?'是':'否','公司共用'];
-   for(const p of allocations(o).filter(p=>!req.query.category||p.category===req.query.category))rows.push([...common,categories[p.category],(p.amountCents/100).toFixed(2),(p.refundCents/100).toFixed(2),'0.00',((p.amountCents-p.refundCents)/100).toFixed(2),o.note,spendSettingLabel(o),((includedInSpend(o)?p.amountCents-p.refundCents:0)/100).toFixed(2)]);
-   if(!req.query.category&&unallocatedRefund(o))rows.push([...common,'待分配退款','0.00','0.00',(unallocatedRefund(o)/100).toFixed(2),Number((-unallocatedRefund(o)/100).toFixed(2)),'退款类别待核对',spendSettingLabel(o),Number(((includedInSpend(o)?-unallocatedRefund(o):0)/100).toFixed(2))]);
+   for(const p of allocations(o).filter(p=>!filter.category||selectedCategories(filter.category).includes(p.category)))rows.push([...common,categories[p.category],(p.amountCents/100).toFixed(2),(p.refundCents/100).toFixed(2),'0.00',((p.amountCents-p.refundCents)/100).toFixed(2),o.note,spendSettingLabel(o),((includedInSpend(o)?p.amountCents-p.refundCents:0)/100).toFixed(2)]);
+   if(!filter.category&&unallocatedRefund(o))rows.push([...common,'待分配退款','0.00','0.00',(unallocatedRefund(o)/100).toFixed(2),Number((-unallocatedRefund(o)/100).toFixed(2)),'退款类别待核对',spendSettingLabel(o),Number(((includedInSpend(o)?-unallocatedRefund(o):0)/100).toFixed(2))]);
   }
   res.setHeader('Content-Disposition',"attachment; filename*=UTF-8''"+encodeURIComponent('采购支出分类明细.csv'));res.type('text/csv').send(csv([['订单ID','采购平台','账号','订单编号','下单日期','付款日期','供应商','订单状态','计入看板','支出归属','采购类别','分类实付','已分配退款','待分配退款','净支出调整','备注','支出统计设置','计入采购净支出'],...rows]));
  });

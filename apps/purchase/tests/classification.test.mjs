@@ -71,7 +71,7 @@ test('分类报表在筛选、退款待分配、排除状态和跨月口径下�
  const a={...base(),classification:split()},b={...base('C-002'),amountCents:20000,refundCents:2000,classification:single('fixed_asset')},c={...base('C-003'),status:'待核对',classification:single('expense')},all=[a,b,c];
  const s=summarize(all,2026);assert.equal(s.amountCents,120000);assert.equal(s.refundCents,17000);assert.equal(s.netCents,103000);assert.equal(s.unallocatedRefundCents,5000);assert.equal(s.categories.reduce((n,c)=>n+c.netCents,0)-s.unallocatedRefundCents,s.netCents);assert.equal(s.categories.reduce((n,c)=>n+c.amountCents,0),s.amountCents);assert.equal(s.excludedCount,1);
  assert.deepEqual(filterOrders(all,{category:'expense'}),[a,c]);const expense=summarize(all,2026,'paid','全部','expense');assert.equal(expense.amountCents,30000);assert.equal(expense.refundCents,0);assert.equal(expense.months[9].netCents,30000);assert.equal(expense.categories.reduce((n,c)=>n+c.netCents,0),30000);
- const totals=classificationTotals([a,b]);assert.deepEqual(totals.categories.map(c=>c.netCents),[60000,18000,30000]);
+ const totals=classificationTotals([a,b]);assert.deepEqual(totals.categories.map(c=>c.netCents),[60000,18000,30000,0]);
 });
 
 test('接口分类、整单与分类明细导出、旧接口以及原表重新导入去重贯通',async()=>{
@@ -94,4 +94,12 @@ test('接口分类、整单与分类明细导出、旧接口以及原表重新�
   o=store.get(o.id);const {classification,...legacy}=o;assert.equal((await call('/api/orders/'+o.id,{...legacy,note:'兼容编辑'},'PUT')).status,200);assert.equal(store.get(o.id).classification.category,'fixed_asset');
   assert.equal((await call('/api/orders',{...base('NEW-FIXED'),classification:single('fixed_asset')})).status,200);assert.equal(store.find(base('NEW-FIXED')).classification.category,'fixed_asset');
  }finally{await new Promise(r=>server.close(r));store.close();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('软件服务费可独立归类和参与四类拆分，多选类别金额只加已选分配',()=>{
+ const keys=['goods','fixed_asset','expense','software_service'];
+ const parts=keys.map((category,index)=>({category,amountCents:100+index,refundCents:index}));
+ const order={amountCents:406,refundCents:6,classification:normalizeClassification({mode:'split',parts},406,6)};
+ assert.equal(normalizeClassification(single('software_service'),100,0).category,'software_service');
+ assert.deepEqual(contribution(order,['goods','software_service']),{amountCents:203,refundCents:3,netCents:200});
 });

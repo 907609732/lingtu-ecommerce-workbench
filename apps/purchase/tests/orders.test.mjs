@@ -8,7 +8,7 @@ import {parse} from 'csv-parse/sync';
 import {openStore} from '../lib/store.mjs';
 import {readTable,normalizeTable,deliveryOf} from '../lib/importer.mjs';
 import {createApp} from '../server.mjs';
-import {filterOrders,sortOrders} from '../public/order-query.mjs';
+import {filterOrders,sortOrders,orderFilterParams,orderFilterFromQuery} from '../public/order-query.mjs';
 const base=()=>({platform:'1688',account:'测试账号',orderNo:'TEST-001',date:'2026-01-31',paidAt:'2026-02-01',supplier:'测试供应商',amountCents:10001,refundCents:101,shippingCents:500,status:'已完成',note:'原备注',items:[{title:'配件',spec:'M5',sku:'',qty:2,unitPriceCents:4750}]});
 const delivery={recipient:'测试收件人',address:'测试省测试市测试路 1 号',phone:'0013800000000',logisticsCompany:'测试快递',trackingNo:'00123456789012345678；SECOND-02'};
 test('旧库补回收货物流：保留 ID、原始行、金额、备注、审计与修改时间，重复打开不改数据',()=>{
@@ -40,5 +40,22 @@ test('快捷备注只改备注，保留物流、原始数据及金额；阻止�
   const res=await patch({note:'待补发\n核对发票 <b>不执行 HTML</b>',updatedAt:first.updatedAt,amountCents:1});assert.equal(res.status,200);const saved=await res.json();assert.equal(saved.amountCents,first.amountCents);assert.deepEqual(deliveryOf(saved),delivery);assert.match(saved.note,/待补发/);assert.equal(store.history(first.id).length,2);assert.equal(store.db.prepare('SELECT original FROM orders WHERE id=?').get(first.id).original,original);
   assert.equal((await patch({note:'过期版本',updatedAt:first.updatedAt})).status,400);assert.match(store.get(first.id).note,/待补发/);
   const qs=new URLSearchParams({platform:'1688',tracking:'yes',sorters:JSON.stringify([{field:'amountCents',dir:'desc'}])});const csv=await fetch(url+'/api/export?'+qs).then(r=>r.text());const rows=parse(csv,{columns:true,bom:true});assert.equal(rows.length,2);assert.deepEqual(rows.map(r=>r['订单编号']),['TEST-002','TEST-001']);assert.equal(rows[1]['收货人姓名'],delivery.recipient);assert.equal(rows[1]['联系手机'],delivery.phone);assert.equal(rows[1]['运单号'],delivery.trackingNo);assert.equal(rows[1]['备注'],saved.note);
+ const multi=orderFilterParams({platform:['1688','淘宝'],carrier:['']});
+ const filtered=await fetch(url+'/api/export?'+multi).then(r=>r.text());
+ assert.deepEqual(parse(filtered,{columns:true,bom:true}).map(r=>r['订单编号']),['TEST-003']);
  }finally{await new Promise(r=>server.close(r));store.close();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('表头多选同列取并集、跨列取交集，运单号保留前导零并匹配商品行',()=>{
+ const first={...base(),...delivery,platform:'淘宝',supplier:'甲'};
+ const second={...base(),...delivery,orderNo:'TEST-002',platform:'京东',supplier:'甲'};
+ const third={...base(),...delivery,orderNo:'TEST-003',platform:'拼多多',supplier:'乙'};
+ const missing={...base(),orderNo:'TEST-004',platform:'拼多多',supplier:'甲'};
+ const orders=[first,second,third,missing];
+ assert.deepEqual(filterOrders(orders,{platform:['淘宝','拼多多'],supplier:['甲']}),[first,missing]);
+ assert.deepEqual(filterOrders(orders,{trackingQuery:'0012345',tracking:'yes'}),[first,second,third]);
+ assert.deepEqual(filterOrders(orders,{carrier:['']}),[missing]);
+ const params=orderFilterParams({supplier:['甲','乙,丙'],carrier:['']});
+ assert.deepEqual(orderFilterFromQuery(params).supplier,['甲','乙,丙']);
+ assert.deepEqual(filterOrders(orders,orderFilterFromQuery(params)),[missing]);
 });

@@ -27,7 +27,7 @@ export function report(s,sources,m,prepared=prepareReport(s,sources)){
  const missingShops=relevantShops.filter(x=>x.status!=='full');if(missingShops.length)add('shops','店铺账单尚未全部通过整月核对',missingShops.length,null);
  for(const e of sources.errors)add('source',e.source+'读取失败：'+e.message,1,null);
  const sourcePurchase=bills.filter(b=>b.linkedSource&&b.period<=m).filter(b=>!all.some(r=>r.bucket!=='excluded'&&(b.linkedSource===r.key||b.linkedSource==='purchase:'+r.sourceId)));if(sourcePurchase.length)add('broken_links','关联源记录已被排除或不存在，请核对',sourcePurchase.length,null,sourcePurchase.map(b=>'bill:'+b.id));
- const categories=['商品采购','固定资产采购','日常支出'].map(title=>({title,amountCents:sum(rows.filter(r=>r.bucket==='purchase'&&r.title===title).map(r=>r.amountCents))}));
+ const categories=['商品采购','固定资产采购','日常支出','软件服务费'].map(title=>({title,amountCents:sum(rows.filter(r=>r.bucket==='purchase'&&r.title===title).map(r=>r.amountCents))}));
  const purchaseRecords=rows.filter(r=>r.source==='purchase'&&r.bucket==='purchase'&&r.amountCents<0);if(purchaseRecords.length&&purchaseRecords.every(r=>r.title==='商品采购'))add('classification','采购目前均为商品采购，请核对设备、软件和耗材分类',new Set(purchaseRecords.map(r=>r.sourceId)).size,null);
  const revision=hash({m,sourceVersions:sources.sourceVersions,bills:s.bills(),payments:s.payments(),overrides,coverage});
  const snapshots=s.all('SELECT id,month,revision,created_at FROM snapshots WHERE month=? ORDER BY created_at DESC',m).map(x=>({...x,stale:x.revision!==revision}));

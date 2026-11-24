@@ -1282,6 +1282,15 @@
     {
       "module": "purchase",
       "method": "GET",
+      "path": "/order-column-filters.js",
+      "kind": "ui",
+      "remote": true,
+      "uiOnly": false,
+      "operationId": "purchase:GET:/order-column-filters.js"
+    },
+    {
+      "module": "purchase",
+      "method": "GET",
       "path": "/order-query.mjs",
       "kind": "ui",
       "remote": true,

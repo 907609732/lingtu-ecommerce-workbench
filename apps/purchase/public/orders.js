@@ -1,14 +1,13 @@
-import {carrierOptions} from './address-parse.mjs';
 import {allShipments,shipmentText} from './shipments.mjs';
 import {includedInSpend} from './order-attributes.mjs';
 import {createOrderImagePreview} from './order-image-preview.js';
 import {orderConfirmation} from './month-locks.js';
 import {categories,classificationLabel,contribution,unallocatedRefund} from './classification.mjs';
 import {categoryOptions} from './classification-ui.js';
-import {emptyOrderFilter,filterOrders,orderTracking,orderCarrier,orderUploadDate} from './order-query.mjs';
-import {mountPeriodPickers,disposePeriodPickers} from './ui/period-picker.mjs';
+import {filterOrders,orderTracking,orderCarrier,orderUploadDate,orderFilterParams} from './order-query.mjs';
+import {createOrderColumnFilters} from './order-column-filters.js';
 
-let grid=null,ctx=null,resize=null,prefs={},ready=false,imagePreview=null;
+let grid=null,ctx=null,resize=null,prefs={},ready=false,imagePreview=null,columnFilters=null;
 const expandedItems=new Set();
 const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
@@ -18,9 +17,9 @@ function savePrefs(){try{localStorage.setItem('purchase-order-view',JSON.stringi
 const plainTooltip=(e,cell)=>{const el=document.createElement('div');el.className='order-tooltip';el.textContent=String(cell.getValue()??'');return el;};
 const editableOrder=o=>!orderConfirmation(o,ctx.state);
 const rows=()=>filterOrders(ctx.state.orders,ctx.state.filter,ctx.state.basis).map(o=>({...o,purchaseDate:ctx.state.basis==='created'?o.date:o.paidAt||o.date,productText:o.items.map(i=>i.title).join('；'),itemCount:o.items.length,trackingText:orderTracking(o),carrierText:orderCarrier(o),classificationValue:o.classification?.mode==='split'?'split':o.classification?.category||'goods'}));
-export function destroyOrders(){if($('#page-content'))disposePeriodPickers($('#page-content'));imagePreview?.dispose();imagePreview=null;if(resize)window.removeEventListener('resize',resize);resize=null;ready=false;if(grid){grid.destroy();grid=null;}}
+export function destroyOrders(){columnFilters?.dispose();columnFilters=null;imagePreview?.dispose();imagePreview=null;if(resize)window.removeEventListener('resize',resize);resize=null;ready=false;if(grid){grid.destroy();grid=null;}}
 function adjustHeight(){if(grid&&$('#order-grid'))grid.setHeight(Math.max(320,window.innerHeight-$('#order-grid').getBoundingClientRect().top-24));}
-function exportLink(){if(!$('#export-link'))return;const sorters=grid&&ready?grid.getSorters().map(s=>({field:s.field,dir:s.dir})):prefs.sorters;const query=new URLSearchParams({...ctx.state.filter,basis:ctx.state.basis,sorters:JSON.stringify(sorters)});$('#export-link').href='/api/export?'+query;$('#classification-export-link').href='/api/classification-export?'+query;}
+function exportLink(){if(!$('#export-link'))return;const sorters=grid&&ready?grid.getSorters().map(s=>({field:s.field,dir:s.dir})):prefs.sorters;const query=orderFilterParams({...ctx.state.filter,basis:ctx.state.basis,sorters:JSON.stringify(sorters)});$('#export-link').href='/api/export?'+query;$('#classification-export-link').href='/api/classification-export?'+query;}
 function summary(){const list=rows();$('#order-summary').innerHTML=`<b>${list.length}</b> 笔订单 <span>实付合计 <strong>${ctx.money(list.reduce((s,o)=>s+contribution(o,ctx.state.filter.category).amountCents,0))}</strong></span><span>已记录退款 ${ctx.money(list.reduce((s,o)=>s+contribution(o,ctx.state.filter.category).refundCents,0))}</span><span>计入支出 <strong>${ctx.money(list.filter(includedInSpend).reduce((s,o)=>s+contribution(o,ctx.state.filter.category).netCents,0))}</strong></span><small>${ctx.state.filter.category?'仅所选类别分配金额 · ':''}实付合计含全部状态及不计入订单</small>`;for(const b of $$('[data-order-preset]'))b.querySelector('span').textContent=filterOrders(ctx.state.orders,{preset:b.dataset.orderPreset},ctx.state.basis).length;exportLink();}
 export async function refreshOrderRows({resetPage=false}={}){
  if(!grid||!ready)return;
@@ -49,18 +48,15 @@ function classificationMenu(e,row){
 }
 export function mountOrders(context){
  destroyOrders();ctx=context;prefs=readPrefs();document.querySelector('.shell').classList.toggle('sidebar-compact',prefs.sidebarCollapsed);
- const {state,esc,icon,options}=ctx;
+ const {state,esc,icon}=ctx;
  imagePreview=createOrderImagePreview({api:ctx.api,esc,openDetail:ctx.detailModal});imagePreview.setEnabled(!!prefs.showImages);
- const select=(key,label,values)=>`<label>${label}<select data-order-filter="${key}" aria-label="${label}">${options(values,state.filter[key],'全部')}</select></label>`;
- const uniq=key=>[...new Set(state.orders.map(o=>o[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
- $('#page-content').innerHTML=`<section class="panel orders-panel"><div class="order-presets">${[['all','全部订单'],['effective','有效采购'],['closed','已关闭'],['excluded','不计入'],['review','待核对'],['refunded','有退款'],['noted','有备注']].map(([key,label])=>`<button data-order-preset="${key}" class="${(state.filter.preset||'all')===key?'active':''}">${label}<span>${filterOrders(state.orders,{preset:key},state.basis).length}</span></button>`).join('')}<div class="order-display-actions"><button id="image-toggle" class="btn ghost" aria-pressed="${!!prefs.showImages}">${prefs.showImages?'隐藏图片':'显示图片'}</button><details class="column-picker"><summary>显示列</summary><div id="column-options"></div></details></div><button class="sidebar-toggle" id="toggle-sidebar">${icon('dashboard')}<span>收起导航</span></button></div>
- <div class="order-main-filters"><div class="search">${icon('search')}<input id="order-search" aria-label="搜索全部订单" placeholder="订单号 / 商品 / 收货人 / 手机 / 地址 / 运单 / 备注" value="${esc(state.filter.q)}"></div><select data-order-filter="platform" aria-label="订单平台">${options(ctx.platforms,state.filter.platform,'全部平台')}</select><select data-order-filter="status" aria-label="订单状态筛选">${options(ctx.statuses,state.filter.status,'全部状态')}</select><div class="lt-period" data-period-picker data-picker="orders-month" data-grains="month" data-period="${esc(state.filter.month)}" data-clearable="true" data-size="sm" data-store-key="purchase-orders-month" data-label="订单月份"></div><select id="order-basis" aria-label="日期口径"><option value="paid" ${state.basis==='paid'?'selected':''}>按付款日期</option><option value="created" ${state.basis==='created'?'selected':''}>按下单日期</option></select><select id="order-sort-mode" aria-label="订单排序方式"><option value="custom">按表头排序</option><option value="createdAt-desc">上传日期：最新在前</option><option value="createdAt-asc">上传日期：最早在前</option><option value="purchaseDate-desc">采购日期：最新在前</option><option value="purchaseDate-asc">采购日期：最早在前</option></select><button class="btn" id="toggle-filters" aria-expanded="false">更多筛选</button><button class="btn ghost" id="reset-orders">重置</button></div>
- <div id="order-advanced" hidden><div class="order-advanced-grid"><label>采购类别<select data-order-filter="category" aria-label="采购类别筛选">${categoryOptions(state.filter.category,'全部采购类别')}</select></label>${select('supplier','供应商',uniq('supplier'))}${select('account','采购账号',uniq('account'))}${select('carrier','物流公司',carrierOptions)}<label>支出统计<select data-order-filter="spend" aria-label="支出统计筛选">${[['','全部'],['excluded','手动不计入'],['normal','按状态正常计入'],['effective','实际计入支出']].map(([value,label])=>`<option value="${value}" ${state.filter.spend===value?'selected':''}>${label}</option>`).join('')}</select></label><label>备注<select data-order-filter="note" aria-label="备注筛选"><option value="">全部</option><option value="yes" ${state.filter.note==='yes'?'selected':''}>有备注</option><option value="no" ${state.filter.note==='no'?'selected':''}>无备注</option></select></label><label>运单信息<select data-order-filter="tracking" aria-label="运单信息筛选"><option value="">全部</option><option value="yes" ${state.filter.tracking==='yes'?'selected':''}>有运单号</option><option value="no" ${state.filter.tracking==='no'?'selected':''}>无运单号</option></select></label><label>开始日期<input type="date" data-order-filter="from" aria-label="开始日期" value="${esc(state.filter.from)}"></label><label>结束日期<input type="date" data-order-filter="to" aria-label="结束日期" value="${esc(state.filter.to)}"></label><label>最低实付（元）<input type="number" step="0.01" min="0" data-order-filter="minAmount" aria-label="最低实付金额" value="${esc(state.filter.minAmount)}" placeholder="不限"></label><label>最高实付（元）<input type="number" step="0.01" min="0" data-order-filter="maxAmount" aria-label="最高实付金额" value="${esc(state.filter.maxAmount)}" placeholder="不限"></label></div></div>
+ $('#page-content').innerHTML=`<section class="panel orders-panel"><details class="order-presets"><summary>订单范围</summary><div class="order-preset-options">${[['all','全部订单'],['effective','有效采购'],['closed','已关闭'],['excluded','不计入'],['review','待核对'],['refunded','有退款'],['noted','有备注']].map(([key,label])=>`<button type="button" data-order-preset="${key}" data-label="${label}" class="${(state.filter.preset||'all')===key?'active':''}">${label}<span>${filterOrders(state.orders,{preset:key},state.basis).length}</span></button>`).join('')}</div></details><div class="order-display-actions"><button id="image-toggle" class="btn ghost" aria-pressed="${!!prefs.showImages}">${prefs.showImages?'隐藏图片':'显示图片'}</button><details class="column-picker"><summary>显示列</summary><div id="column-options"></div></details></div><button class="sidebar-toggle" id="toggle-sidebar">${icon('dashboard')}<span>收起导航</span></button>
+ <div class="order-main-filters"><div class="search">${icon('search')}<input id="order-search" aria-label="搜索全部订单" placeholder="搜索订单、商品、运单" value="${esc(state.filter.q)}"></div></div>
+ <div id="order-active-filters" aria-label="已应用的筛选" hidden></div>
  <div class="order-grid-tools"><div id="order-summary" aria-live="polite"></div><details class="order-batch-menu"><summary>批量操作</summary><div class="order-selection-bar"><strong id="selected-orders-count">已选 0 笔</strong><button class="text-button" id="select-filtered-orders">选择全部筛选结果</button><button class="text-button" id="clear-order-selection">清空选择</button><button class="btn" id="batch-attributes" disabled>批量修改属性</button><button class="btn" id="batch-supplier" disabled>批量改供应商</button><button class="btn" id="batch-account" disabled>批量改账号</button><select id="batch-category" aria-label="批量目标类别">${categoryOptions('goods')}</select><button class="btn" id="batch-classify" disabled>批量修改类别</button></div></details></div><div id="order-page-size-holder" hidden><label class="page-size-label">每页<select id="order-page-size" aria-label="每页订单数">${[[50,'50 笔'],[100,'100 笔'],[200,'200 笔'],[0,'全部']].map(([n,label])=>`<option value="${n}" ${prefs.pageSize===n?'selected':''}>${label}</option>`).join('')}</select></label></div><div id="order-grid" aria-label="采购订单明细表"></div></section>`;
  const toolbar=document.createElement('div');toolbar.className='order-toolbar';
  const panel=$('.orders-panel'),presets=$('.order-presets'),filters=$('.order-main-filters'),display=$('.order-display-actions'),sidebar=$('#toggle-sidebar');
  panel.prepend(toolbar);toolbar.append(presets,filters,display,sidebar);
- mountPeriodPickers($('#page-content'),{onChange:({period})=>{state.filter.month=period??'';refreshOrderRows({resetPage:true}).catch(error=>ctx.toast(error.message));}});
  const textCol=(title,field,width,extra={})=>({title,field,width,minWidth:60,sorter:'string',formatter:'plaintext',tooltip:plainTooltip,...extra});
  const itemText=(i,key)=>key==='unitPriceCents'?(i.unitPriceCents==null?'未提供':(i.unitPriceCents/100).toFixed(2)):key==='productText'?i.title+(i.spec?' · '+i.spec:''):String(i[key]??'')||'—';
  const itemTooltip=(e,cell)=>{const el=document.createElement('div');el.className='order-tooltip';el.textContent=cell.getData().items.map((i,n)=>`${n+1}. ${itemText(i,'productText')}\n单价：${itemText(i,'unitPriceCents')} 元 · 数量：${i.qty} · 单位：${i.unit||'未提供'}${shipmentText(i,'trackingNo')?`\n运单号：${shipmentText(i,'trackingNo')} · ${shipmentText(i,'logisticsCompany')}`:''}`).join('\n\n');return el;};
@@ -74,26 +70,42 @@ export function mountOrders(context){
   {title:'选择',formatter:'rowSelection',cssClass:'order-selection-cell',titleFormatter:pageCheckbox,width:42,minWidth:42,hozAlign:'center',headerSort:false,frozen:true},
   {title:'#',formatter:'rownum',width:38,minWidth:38,hozAlign:'center',headerSort:false,frozen:true},
   {title:'供应商 / 订单号',field:'supplier',width:210,minWidth:140,frozen:true,sorter:'string',tooltip:(e,cell)=>{const el=document.createElement('div');el.className='order-tooltip';el.textContent=[cell.getData().supplier,cell.getData().orderNo,lockNotice(cell.getData())].filter(Boolean).join('\n');return el;},formatter:cell=>{const notice=lockNotice(cell.getData());return `<div class="grid-lines"><div class="grid-supplier-heading"><span class="grid-primary">${esc(cell.getValue())}</span>${notice?`<span class="grid-lock-icon" role="img" tabindex="0" aria-label="${esc(notice)}" title="${esc(notice)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></span>`:''}</div><div class="grid-secondary">${esc(cell.getData().orderNo)}</div></div>`;}},
-  {title:'图片',field:'orderImages',width:134,minWidth:100,headerSort:false,visible:!!prefs.showImages,formatter:imagePreview.formatter,variableHeight:true,cssClass:'order-preview-cell'},
-  {title:'采购类别',field:'classificationValue',width:150,minWidth:130,cssClass:'classification-cell',sorter:(a,b)=>(categories[a]||'混合').localeCompare(categories[b]||'混合','zh-CN'),editor:'list',editable:cell=>editableOrder(cell.getData()),editorParams:{values:categories},formatter:cell=>{const o=cell.getData(),code=o.classification?.mode==='split'?'split':o.classification?.category||'goods',p=contribution(o,state.filter.category);return `<div class="class-cell"><span class="class-badge ${code}">${classificationLabel(o)}</span>${state.filter.category?`<small class="class-caption">此类实付 ${ctx.money(p.amountCents)} · 行内为整单</small>`:''}${unallocatedRefund(o)?`<small>待分配退款 ${ctx.money(unallocatedRefund(o))}</small>`:''}</div>`;},cellEdited:cell=>{const target=cell.getValue(),row=cell.getRow(),o=row.getData();row.update({classificationValue:o.classification?.mode==='split'?'split':o.classification?.category||'goods'});ctx.changeClassification([o],target);}},
-  {title:'实付金额',field:'amountCents',width:116,minWidth:110,sorter:'number',hozAlign:'right',formatter:c=>`<b class="grid-money">${ctx.money(c.getValue())}</b>`},
-  {title:'支出统计',field:'excludedFromSpend',width:116,minWidth:110,sorter:(a,b)=>Number(a)-Number(b),tooltip:(e,c)=>c.getValue()?'手动设为不计入采购支出；订单和真实状态仍保留':includedInSpend(c.getData())?'按订单状态正常计入采购支出':'当前订单状态不计入采购支出',formatter:c=>`<span class="spend-badge ${c.getValue()?'excluded':''}">${c.getValue()?'不计入':includedInSpend(c.getData())?'计入':'未计入'}</span>`},
+  textCol('采购日期','purchaseDate',128),
+  {title:'平台',field:'platform',width:89,minWidth:82,sorter:'string',formatter:c=>ctx.tag(c.getValue())},
   textCol('采购账号','account',125),
+  {title:'采购类别',field:'classificationValue',width:150,minWidth:130,cssClass:'classification-cell',sorter:(a,b)=>(categories[a]||'混合').localeCompare(categories[b]||'混合','zh-CN'),editor:'list',editable:cell=>editableOrder(cell.getData()),editorParams:{values:categories},formatter:cell=>{const o=cell.getData(),code=o.classification?.mode==='split'?'split':o.classification?.category||'goods',p=contribution(o,state.filter.category);return `<div class="class-cell"><span class="class-badge ${code}">${classificationLabel(o)}</span>${state.filter.category?`<small class="class-caption">所选类别实付 ${ctx.money(p.amountCents)} · 行内为整单</small>`:''}${unallocatedRefund(o)?`<small>待分配退款 ${ctx.money(unallocatedRefund(o))}</small>`:''}</div>`;},cellEdited:cell=>{const target=cell.getValue(),row=cell.getRow(),o=row.getData();row.update({classificationValue:o.classification?.mode==='split'?'split':o.classification?.category||'goods'});ctx.changeClassification([o],target);}},
+  textCol('物流公司','carrierText',124),
+  textCol('运单号','trackingText',145,{cssClass:'tracking-cell'}),
+  {title:'实付金额',field:'amountCents',width:116,minWidth:110,sorter:'number',hozAlign:'right',formatter:c=>`<b class="grid-money">${ctx.money(c.getValue())}</b>`},
+  {title:'状态',field:'status',width:100,minWidth:92,sorter:'string',formatter:c=>ctx.statusTag(c.getValue())},
+  {title:'支出统计',field:'excludedFromSpend',width:116,minWidth:110,sorter:(a,b)=>Number(a)-Number(b),tooltip:(e,c)=>c.getValue()?'手动设为不计入采购支出；订单和真实状态仍保留':includedInSpend(c.getData())?'按订单状态正常计入采购支出':'当前订单状态不计入采购支出',formatter:c=>`<span class="spend-badge ${c.getValue()?'excluded':''}">${c.getValue()?'不计入':includedInSpend(c.getData())?'计入':'未计入'}</span>`},
+  {title:'图片',field:'orderImages',width:134,minWidth:100,headerSort:false,visible:!!prefs.showImages,formatter:imagePreview.formatter,variableHeight:true,cssClass:'order-preview-cell'},
   {title:'商品 / 规格',field:'productText',width:210,minWidth:150,sorter:'string',tooltip:itemTooltip,formatter:itemFormatter('productText'),variableHeight:true},
   {title:'单价(元)',field:'itemPrices',width:86,minWidth:80,headerSort:false,hozAlign:'right',tooltip:itemTooltip,formatter:itemFormatter('unitPriceCents'),variableHeight:true},
   {title:'数量',field:'itemQuantities',width:66,minWidth:60,headerSort:false,hozAlign:'right',tooltip:itemTooltip,formatter:itemFormatter('qty'),variableHeight:true},
   {title:'单位',field:'itemUnits',width:60,minWidth:55,headerSort:false,tooltip:itemTooltip,formatter:itemFormatter('unit'),variableHeight:true},
-  {title:'平台',field:'platform',width:65,minWidth:60,sorter:'string',formatter:c=>ctx.tag(c.getValue())},
-  textCol('采购日期','purchaseDate',98),
   textCol('数据来源','sourceLabel',240),textCol('录入人','uploadedBy',110),
   textCol('上传日期','createdAt',210,{headerTooltip:'首次录入系统的时间（北京时间），后续编辑不会改变',formatter:cell=>orderUploadDate(cell.getValue()),tooltip:(e,cell)=>orderUploadDate(cell.getValue())}),
-  {title:'状态',field:'status',width:80,minWidth:70,sorter:'string',formatter:c=>ctx.statusTag(c.getValue())},
-  textCol('收货人','recipient',80),textCol('联系手机','phone',127),textCol('收货地址','address',undefined,{minWidth:160,widthGrow:2}),textCol('物流公司','carrierText',95),textCol('运单号','trackingText',145,{cssClass:'tracking-cell'}),
+  textCol('收货人','recipient',80),textCol('联系手机','phone',127),textCol('收货地址','address',undefined,{minWidth:160,widthGrow:2}),
   {title:'订单备注',field:'note',width:145,minWidth:105,sorter:'string',tooltip:plainTooltip,formatter:c=>!editableOrder(c.getData())?`<span class="grid-note-readonly">${esc(c.getValue()||'—')}</span>`: `<button class="grid-note ${c.getValue()?'has-note':''}" data-note="${esc(c.getData().id)}" title="编辑此订单备注">${c.getValue()?esc(c.getValue()):'＋ 添加备注'}</button>`},
   textCol('订单编号','orderNo',190,{visible:false}),textCol('下单日期','date',100,{visible:false}),textCol('付款日期','paidAt',100,{visible:false}),
   {title:'已记录退款',field:'refundCents',width:100,sorter:'number',visible:false,formatter:c=>ctx.money(c.getValue()),hozAlign:'right'},
   {title:'操作',field:'actions',width:132,minWidth:132,headerSort:false,frozen:true,formatter:c=>`<button class="grid-action" data-detail="${esc(c.getData().id)}">详情</button>${editableOrder(c.getData())?`<button class="grid-action" data-note="${esc(c.getData().id)}">备注</button><button class="grid-action" data-edit="${esc(c.getData().id)}">编辑</button>`:''}`}
  ];
+ let searchTimer;
+ const applyFilters=()=>{
+  clearTimeout(searchTimer);
+  if($('#order-search').value!==state.filter.q)$('#order-search').value=state.filter.q;
+  const scope=state.filter.preset||'all';
+  for(const button of $$('[data-order-preset]'))button.classList.toggle('active',button.dataset.orderPreset===scope);
+  columnFilters.sync();
+  ctx.replaceRoute();
+  adjustHeight();
+  refreshOrderRows({resetPage:true}).catch(error=>ctx.toast(error.message));
+ };
+ columnFilters=createOrderColumnFilters({state,chipBar:$('#order-active-filters'),onChange:applyFilters,escape:esc});
+ columnFilters.decorate(columns);
+ columnFilters.sync();
  columns.forEach(c=>{if(c.field&&c.field!=='orderImages'&&Object.hasOwn(prefs.columns,c.field)&&!c.frozen)c.visible=prefs.columns[c.field];});
  grid=new Tabulator('#order-grid',{
   data:rows(),index:'id',selectableRows:'highlight',selectableRowsCheck:row=>editableOrder(row.getData()),rowContextMenu:classificationMenu,layout:'fitColumns',height:Math.max(320,window.innerHeight-310),sortOrderReverse:true,
@@ -113,21 +125,15 @@ export function mountOrders(context){
  $('#batch-classify').addEventListener('click',()=>ctx.changeClassification(grid.getSelectedData(),$('#batch-category').value,{confirm:true}));
  grid.on('rowDblClick',(e,row)=>{if(!e.target.closest('button,input,select,.classification-cell'))ctx.detailModal(row.getData().id);});
  $('#order-grid').addEventListener('click',e=>{const button=e.target.closest('[data-expand-items]');if(!button)return;const id=button.dataset.expandItems;expandedItems.has(id)?expandedItems.delete(id):expandedItems.add(id);const row=grid.getRow(id);row.reformat();row.normalizeHeight();});
- const syncSortMode=()=>{const sort=prefs.sorters[0],value=prefs.sorters.length===1&&sort?sort.field+'-'+sort.dir:'custom';$('#order-sort-mode').value=['createdAt-desc','createdAt-asc','purchaseDate-desc','purchaseDate-asc'].includes(value)?value:'custom';};
- syncSortMode();$('#order-sort-mode').onchange=e=>{if(e.target.value==='custom')return;const [field,dir]=e.target.value.split('-');grid.setSort(field,dir);};
- grid.on('dataSorted',sorters=>{prefs.sorters=sorters.map(s=>({field:s.field,dir:s.dir}));syncSortMode();savePrefs();if(ready){exportLink();selectionSummary();}});
+ grid.on('dataSorted',sorters=>{prefs.sorters=sorters.map(s=>({field:s.field,dir:s.dir}));savePrefs();if(ready){exportLink();selectionSummary();}});
  $('#column-options').innerHTML=columns.filter(c=>c.field&&c.field!=='orderImages'&&!c.frozen).map(c=>`<label><input type="checkbox" data-order-column="${c.field}" ${c.visible===false?'':'checked'}>${esc(c.title)}</label>`).join('');
  $('#column-options').addEventListener('change',e=>{const field=e.target.dataset.orderColumn;if(!field)return;grid.getColumn(field).toggle();prefs.columns[field]=e.target.checked;savePrefs();});
  $('#order-page-size').addEventListener('change',async e=>{prefs.pageSize=Number(e.target.value);savePrefs();await grid.setPageSize(prefs.pageSize||Math.max(state.orders.length,1));});
 
  $('#toggle-sidebar span').textContent=prefs.sidebarCollapsed?'展开导航':'收起导航';
  $('#toggle-sidebar').addEventListener('click',()=>{prefs.sidebarCollapsed=!prefs.sidebarCollapsed;savePrefs();document.querySelector('.shell').classList.toggle('sidebar-compact',prefs.sidebarCollapsed);$('#toggle-sidebar span').textContent=prefs.sidebarCollapsed?'展开导航':'收起导航';grid.redraw(true);adjustHeight();});
- $('#toggle-filters').addEventListener('click',()=>{const p=$('#order-advanced');p.hidden=!p.hidden;$('#toggle-filters').setAttribute('aria-expanded',String(!p.hidden));adjustHeight();});
  $('#image-toggle').addEventListener('click',()=>{prefs.showImages=!prefs.showImages;savePrefs();imagePreview.setEnabled(prefs.showImages);const column=grid.getColumn('orderImages');prefs.showImages?column.show():column.hide();$('#image-toggle').textContent=prefs.showImages?'隐藏图片':'显示图片';$('#image-toggle').setAttribute('aria-pressed',String(prefs.showImages));grid.getRows('visible').forEach(row=>row.normalizeHeight());grid.redraw(true);});
- $('#reset-orders').addEventListener('click',()=>{state.filter=emptyOrderFilter();mountOrders(ctx);});
- $('#order-basis').addEventListener('change',e=>{state.basis=e.target.value;refreshOrderRows({resetPage:true}).catch(e=>ctx.toast(e.message));});
- for(const el of $$('[data-order-filter]'))if(el.dataset.orderFilter!=='month')el.addEventListener('change',()=>{state.filter[el.dataset.orderFilter]=el.value;refreshOrderRows({resetPage:true}).catch(e=>ctx.toast(e.message));});
- let timer;$('#order-search').addEventListener('input',e=>{state.filter.q=e.target.value;grid.deselectRow();clearTimeout(timer);timer=setTimeout(()=>refreshOrderRows({resetPage:true}).catch(e=>ctx.toast(e.message)),150);});
- for(const el of $$('[data-order-preset]'))el.addEventListener('click',()=>{state.filter.preset=el.dataset.orderPreset;$$('[data-order-preset]').forEach(b=>b.classList.toggle('active',b===el));refreshOrderRows({resetPage:true}).catch(e=>ctx.toast(e.message));});
+ $('#order-search').addEventListener('input',e=>{state.filter.q=e.target.value;grid.deselectRow();clearTimeout(searchTimer);searchTimer=setTimeout(()=>{if($('#order-search')===e.target)applyFilters();},150);});
+ for(const el of $$('[data-order-preset]'))el.addEventListener('click',()=>{state.filter.preset=el.dataset.orderPreset;presets.open=false;applyFilters();});
  resize=adjustHeight;window.addEventListener('resize',resize);
 }

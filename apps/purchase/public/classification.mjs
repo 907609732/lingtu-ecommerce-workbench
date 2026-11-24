@@ -1,4 +1,4 @@
-export const categories=Object.freeze({goods:'商品采购',fixed_asset:'固定资产采购',expense:'日常支出'});
+export const categories=Object.freeze({goods:'商品采购',fixed_asset:'固定资产采购',expense:'日常支出',software_service:'软件服务费'});
 export const defaultClassification=()=>({mode:'single',category:'goods',owner:'company'});
 export function normalizeClassification(value,amountCents,refundCents){
  const c=value===undefined?defaultClassification():value;
@@ -8,7 +8,7 @@ export function normalizeClassification(value,amountCents,refundCents){
   if(!Object.hasOwn(categories,c.category))throw Error('请选择有效的采购类别');
   return {mode:'single',category:c.category,owner:'company'};
  }
- if(!Array.isArray(c.parts)||c.parts.length<2||c.parts.length>3)throw Error('混合订单请分配到两种或三种采购类别');
+ if(!Array.isArray(c.parts)||c.parts.length<2||c.parts.length>Object.keys(categories).length)throw Error('混合订单至少分配到两种采购类别');
  const seen=new Set();let paid=0,refund=0;
  const parts=c.parts.map(p=>{
   if(!p||!Object.hasOwn(categories,p.category)||seen.has(p.category))throw Error('拆分类别无效或重复，每种类别最多一行');
@@ -27,12 +27,21 @@ export function allocations(o){
  return c.mode==='split'?c.parts.map(p=>({...p})):[{category:c.category,amountCents:o.amountCents,refundCents:o.refundCents}];
 }
 export const classificationLabel=o=>o.classification?.mode==='split'?'混合':categories[o.classification?.category||'goods'];
-export const hasCategory=(o,category)=>!category||allocations(o).some(p=>p.category===category);
+export const selectedCategories=category=>Array.isArray(category)?category:category?[category]:[];
+export const hasCategory=(o,category)=>{
+ const selected=selectedCategories(category);
+ return !selected.length||allocations(o).some(p=>selected.includes(p.category));
+};
 export const unallocatedRefund=o=>o.refundCents-allocations(o).reduce((s,p)=>s+p.refundCents,0);
 export function contribution(o,category=''){
- if(!category)return {amountCents:o.amountCents,refundCents:o.refundCents,netCents:o.amountCents-o.refundCents};
- const p=allocations(o).find(p=>p.category===category)||{amountCents:0,refundCents:0};
- return {amountCents:p.amountCents,refundCents:p.refundCents,netCents:p.amountCents-p.refundCents};
+ const selected=selectedCategories(category);
+ if(!selected.length)return {amountCents:o.amountCents,refundCents:o.refundCents,netCents:o.amountCents-o.refundCents};
+ let amountCents=0,refundCents=0;
+ for(const part of allocations(o))if(selected.includes(part.category)){
+  amountCents+=part.amountCents;
+  refundCents+=part.refundCents;
+ }
+ return {amountCents,refundCents,netCents:amountCents-refundCents};
 }
 export function classificationTotals(orders,category=''){
  const totals=Object.entries(categories).map(([category,label])=>({category,label,amountCents:0,refundCents:0,netCents:0,count:0}));

@@ -118,7 +118,9 @@ test('native upgrade invokes real stop and sealed backup before allowing package
   assert.equal(r.status,0,r.stderr);
   assert.throws(()=>fs.lstatSync(singleton),{code:'ENOENT'});
   const saved=fs.readdirSync(path.join(f.base,'backups')).find(name=>name.includes('.chromium-locks-'));
-  assert.equal(fs.readlinkSync(path.join(f.base,'backups',saved,'sales-SingletonLock')),os.hostname()+'-2147483647');
+  const receipt=path.join(f.base,'backups',saved,'links.json');
+  assert.ok(fs.lstatSync(receipt).isFile());
+  assert.deepEqual(JSON.parse(fs.readFileSync(receipt,'utf8')),[{module:'sales',name:'SingletonLock',link:os.hostname()+'-2147483647'}]);
   const unrelated=path.join(profile,'unexpected-link');
   fs.symlinkSync(path.join(f.dir,'absent'),unrelated);
   r=f.run('upgrade_init');
