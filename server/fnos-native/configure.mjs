@@ -39,12 +39,43 @@ export function configFileAt(root){
  if(candidates.length!==1)throw Error('完整副本需要唯一 config.json 或 config/web.json');return candidates[0];
 }
 const digest=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-export async function backupNative(sourceRoot,target){
+function quarantineStoppedChromiumLocks(sourceRoot,backupTarget){
+ if(process.platform!=='linux')return;
+ const uid=process.getuid(),entries=[];
+ for(const module of ['sales','overview']){
+  const profile=physicalPath(path.join(sourceRoot,'browser-profiles',module));
+  for(const name of ['SingletonLock','SingletonCookie','SingletonSocket']){
+   const file=path.join(profile,name);let stat;
+   try{stat=fs.lstatSync(file);}catch(error){if(error.code==='ENOENT')continue;throw error;}
+   if(!stat.isSymbolicLink()||stat.uid!==uid)throw Error('浏览器锁身份无法确认：'+module+'/'+name);
+   entries.push({module,name,file,stat,link:fs.readlinkSync(file)});
+  }
+  const locks=entries.filter(entry=>entry.module===module);
+  if(!locks.length)continue;
+  const lock=locks.find(entry=>entry.name==='SingletonLock'),link=lock?.link||'';
+  const prefix=os.hostname()+'-',pid=link.startsWith(prefix)?link.slice(prefix.length):'';
+  if(!/^[1-9]\d*$/.test(pid)||!Number.isSafeInteger(Number(pid)))throw Error('无法确认浏览器锁的本机进程：'+module);
+  try{process.kill(Number(pid),0);throw Error('浏览器锁进程仍存在：'+module);}
+  catch(error){if(error.code!=='ESRCH')throw error;}
+ }
+ if(!entries.length)return;
+ const destination=fs.mkdtempSync(backupTarget+'.chromium-locks-');
+ for(const entry of entries){
+  const current=fs.lstatSync(entry.file);
+  if(!current.isSymbolicLink()||current.dev!==entry.stat.dev||current.ino!==entry.stat.ino||current.uid!==uid||fs.readlinkSync(entry.file)!==entry.link)throw Error('浏览器锁在检查后发生变化：'+entry.module+'/'+entry.name);
+  fs.renameSync(entry.file,path.join(destination,entry.module+'-'+entry.name));
+ }
+ return destination;
+}
+export async function backupNative(sourceRoot,target,{quarantineBrowserLocks=false}={}){
  sourceRoot=physicalPath(sourceRoot);target=physicalPath(target);
  if(within(target,sourceRoot)||within(sourceRoot,target))throw Error('备份不能位于源目录内部或覆盖源目录');
- if(fs.existsSync(target))throw Error('备份目标已存在');complete(sourceRoot);assertStopped(sourceRoot);
+ if(fs.existsSync(target))throw Error('备份目标已存在');complete(sourceRoot);
+ assertStopped(sourceRoot,{allowChromiumLocks:quarantineBrowserLocks});
  const sourceConfig=JSON.parse(fs.readFileSync(configFileAt(sourceRoot),'utf8'));
  const workspaceIdentity=sourceConfig.dataVersion?.enabled?assertNativeUvcsPrepared(sourceConfig).identity:undefined;
+ if(quarantineBrowserLocks)quarantineStoppedChromiumLocks(sourceRoot,target);
+ assertStopped(sourceRoot);
  const before=tree(sourceRoot),stage=target+'.staging-'+randomUUID();
  try{
   fs.cpSync(sourceRoot,stage,{recursive:true,filter:src=>!fs.lstatSync(src).isSocket()});
@@ -65,10 +96,14 @@ function tree(root,prefix=''){
  }
  return entries;
 }
-function assertStopped(root){
+function assertStopped(root,{allowChromiumLocks=false}={}){
  const names=new Set(['web-runtime.json','native-supervisor.json','.integration-runtime.json','.integration-start.lock','.web-collector.json']);
  const walk=dir=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){
-  const file=path.join(dir,e.name);if(e.isSymbolicLink())throw Error('完整副本不允许符号链接');
+  const file=path.join(dir,e.name);
+  if(e.isSymbolicLink()){
+   if(allowChromiumLocks&&/^browser-profiles\/(sales|overview)\/Singleton(Lock|Cookie|Socket)$/.test(path.relative(root,file).split(path.sep).join('/')))continue;
+   throw Error('完整副本不允许符号链接：'+path.relative(root,file));
+  }
   if(e.isDirectory())walk(file);else if(e.isFile()&&names.has(e.name)){
    const r=JSON.parse(fs.readFileSync(file));for(const pid of [r.pid,r.childPid??r.ownerPid].filter(v=>v!==undefined&&v!==null)){
     if(!Number.isSafeInteger(pid)||pid<1)throw Error('运行记录无效');

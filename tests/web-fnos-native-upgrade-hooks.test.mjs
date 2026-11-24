@@ -88,8 +88,48 @@ test('native upgrade invokes real stop and sealed backup before allowing package
  const backup=path.join(f.base,'backups',backups[0]),manifest=JSON.parse(fs.readFileSync(path.join(backup,'migration-manifest.json')));assert.equal(manifest.stopped,true);
  for(const [id,digest]of before){assert.equal(hash(path.join(c.modules[id].dataDir,databases[id])),digest);assert.equal(hash(path.join(backup,'data',id,databases[id])),digest);assert.ok(manifest.files.some(p=>p.path==='data/'+id+'/'+databases[id]));}
  assert.equal(fs.readFileSync(path.join(backup,'config/web.json'),'utf8'),fs.readFileSync(f.config,'utf8'));assert.equal(fs.readFileSync(f.retained,'utf8'),'prior backup remains private');
+ // An interrupted Chromium can leave a dangling process lock. The old
+ // pre-upgrade hook refuses it before copying any source data.
+ const profile=path.join(f.data,'browser-profiles','sales');
+ fs.mkdirSync(profile,{recursive:true});
+ const singleton=path.join(profile,'SingletonLock');
+ fs.symlinkSync(path.join(f.dir,'absent-chromium-lock-target'),singleton);
+ fs.writeFileSync(trace,'');
+ r=f.run('upgrade_init');
+ assert.equal(r.status,1);
+ assert.match(r.stderr,/完整副本不允许符号链接|无法确认浏览器锁的本机进程/);
+ assert.deepEqual(fs.readFileSync(trace,'utf8').trim().split('\n'),['stop','backup']);
+ assert.deepEqual(fs.readdirSync(path.join(f.base,'backups')).filter(p=>p.startsWith('before-upgrade-')),backups);
+ const quarantined=path.join(f.dir,'quarantined-singleton');
+ fs.renameSync(singleton,quarantined);
+ assert.ok(fs.lstatSync(quarantined).isSymbolicLink());
+ r=f.run('upgrade_init');
+ assert.equal(r.status,0,r.stderr);
+ for(const [id,digest]of before)assert.equal(hash(path.join(c.modules[id].dataDir,databases[id])),digest);
+ if(process.platform==='linux'){
+  fs.symlinkSync(os.hostname()+'-'+process.pid,singleton);
+  r=f.run('upgrade_init');
+  assert.equal(r.status,1);
+  assert.match(r.stderr,/浏览器锁进程仍存在/);
+  assert.ok(fs.lstatSync(singleton).isSymbolicLink());
+  fs.unlinkSync(singleton);
+  fs.symlinkSync(os.hostname()+'-2147483647',singleton);
+  r=f.run('upgrade_init');
+  assert.equal(r.status,0,r.stderr);
+  assert.throws(()=>fs.lstatSync(singleton),{code:'ENOENT'});
+  const saved=fs.readdirSync(path.join(f.base,'backups')).find(name=>name.includes('.chromium-locks-'));
+  assert.equal(fs.readlinkSync(path.join(f.base,'backups',saved,'sales-SingletonLock')),os.hostname()+'-2147483647');
+  const unrelated=path.join(profile,'unexpected-link');
+  fs.symlinkSync(path.join(f.dir,'absent'),unrelated);
+  r=f.run('upgrade_init');
+  assert.equal(r.status,1);
+  assert.match(r.stderr,/完整副本不允许符号链接.*unexpected-link/);
+  assert.ok(fs.lstatSync(unrelated).isSymbolicLink());
+  fs.unlinkSync(unrelated);
+ }
  // A record that cannot pass the production ownership contract must prevent backup.
- fs.writeFileSync(path.join(c.stateDir,'native-supervisor.json'),'{}');fs.writeFileSync(trace,'');r=f.run('upgrade_init');assert.equal(r.status,1);assert.match(r.stderr,/未能安全停写/);assert.deepEqual(fs.readFileSync(trace,'utf8').trim().split('\n'),['stop']);assert.equal(fs.readdirSync(path.join(f.base,'backups')).length,2);
+ const backupCount=fs.readdirSync(path.join(f.base,'backups')).length;
+ fs.writeFileSync(path.join(c.stateDir,'native-supervisor.json'),'{}');fs.writeFileSync(trace,'');r=f.run('upgrade_init');assert.equal(r.status,1);assert.match(r.stderr,/未能安全停写/);assert.deepEqual(fs.readFileSync(trace,'utf8').trim().split('\n'),['stop']);assert.equal(fs.readdirSync(path.join(f.base,'backups')).length,backupCount);
  fs.unlinkSync(path.join(c.stateDir,'native-supervisor.json'));
  // Real SQLite backup verification failure must also prevent package replacement.
  fs.writeFileSync(path.join(c.modules.purchase.dataDir,databases.purchase),'not a SQLite database');fs.writeFileSync(trace,'');r=f.run('upgrade_init');assert.equal(r.status,1);assert.match(r.stderr,/备份或恢复校验失败/);assert.deepEqual(fs.readFileSync(trace,'utf8').trim().split('\n'),['stop','backup']);assert.equal(fs.readFileSync(path.join(c.modules.purchase.dataDir,databases.purchase),'utf8'),'not a SQLite database');

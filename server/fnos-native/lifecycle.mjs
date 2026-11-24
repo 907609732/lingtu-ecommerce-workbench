@@ -81,7 +81,7 @@ export async function main(argv=process.argv.slice(2)){
  if(action==='seal-source')return {ok:true,manifest:await sealStoppedSource(o.source,{workspaceIdentity:o['workspace-id']||o['workspace-name']||o.repository?{id:o['workspace-id'],name:o['workspace-name'],repository:o.repository}:undefined})};
  if(action==='backup'){
   const c=loadConfig(o.config);await nativeLifecycle('stop',o.config);
-  return backupNative(c.native.dataRoot,o.output);
+  return withNativeLifecycleLock(c.stateDir,()=>backupNative(c.native.dataRoot,o.output,{quarantineBrowserLocks:true}));
  }
  if(action==='configure'){
   // fnOS wizard values arrive as environment fields. No shell eval or credentials
